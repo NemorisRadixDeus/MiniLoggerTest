@@ -1,61 +1,192 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using Serilog;
+using Serilog.Events;
 
-namespace MiniLoggerTest
+namespace TaskManager
 {
     class Program
     {
+        // Список задач
+        static List<string> tasks = new List<string>();
+
+        // Трассировка (System.Diagnostics — осталась из предыдущей версии)
+        static TraceSource traceSource = new TraceSource("TaskManager", SourceLevels.All);
+
         static void Main(string[] args)
         {
-            // Настройка Serilog: консоль + файл с дневной ротацией
+            // --- Настройка трассировки (System.Diagnostics) ---
+            var fileListener = new TextWriterTraceListener("app-trace.log");
+            fileListener.TraceOutputOptions = TraceOptions.DateTime;
+            Trace.Listeners.Add(fileListener);
+            Trace.AutoFlush = true;
+            traceSource.Listeners.Clear();
+            traceSource.Listeners.Add(fileListener);
+
+            // --- Настройка Serilog: структурированное логирование ---
             Log.Logger = new LoggerConfiguration()
                 .MinimumLevel.Debug()
-                .WriteTo.Console()
-                .WriteTo.File("logs\\minilogger-.log",
+                // Текстовые логи в консоль (для удобства чтения)
+                .WriteTo.Console(
+                    outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
+                // Текстовые логи в файл (как было раньше)
+                .WriteTo.File("logs\\taskmanager-.log",
+                    rollingInterval: RollingInterval.Day,
+                    outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
+                // НОВОЕ: структурированные логи в JSON-файл
+                .WriteTo.File(
+                    new Serilog.Formatting.Json.JsonFormatter(),
+                    "logs\\taskmanager-structured-.json",
                     rollingInterval: RollingInterval.Day)
                 .CreateLogger();
 
-            // 1. Debug — перед запуском основной логики
-            Log.Debug("Инициализация приложения. Подготовка к запуску основной логики.");
+            // --- Старт приложения ---
+            Log.Information("Приложение TaskManager запущено");
+            Trace.WriteLine("[TRACE] Инициализация системы хранения задач...");
 
-            // 2. Information — приложение запущено
-            Log.Information("Приложение MiniLoggerTest запущено.");
-
-            // 3. Основная логика — запрашиваем возраст пользователя
-            Console.Write("Введите ваш возраст: ");
-            string input = Console.ReadLine();
-
-            if (!int.TryParse(input, out int age) || age < 0 || age > 150)
+            try
             {
-                // Warning — некорректный ввод, применяем значение по умолчанию
-                Log.Warning("Некорректный ввод возраста: \"{Input}\". Применяется значение по умолчанию: 25.", input);
-                age = 25;
+                if (tasks == null)
+                {
+                    Log.Fatal("Не удалось инициализировать компонент хранения задач. Завершение приложения.");
+                    return;
+                }
+
+                Trace.WriteLine("[TRACE] Система хранения задач инициализирована успешно.");
+                Console.WriteLine("=== Менеджер задач ===");
+                Console.WriteLine("Команды: add, remove, list, exit");
+                Console.WriteLine();
+
+                // --- Главный цикл ---
+                bool running = true;
+                while (running)
+                {
+                    Console.Write("Введите команду: ");
+                    string input = Console.ReadLine()?.Trim().ToLower();
+
+                    switch (input)
+                    {
+                        case "add":
+                            AddTask();
+                            break;
+                        case "remove":
+                            RemoveTask();
+                            break;
+                        case "list":
+                            ListTasks();
+                            break;
+                        case "exit":
+                            running = false;
+                            break;
+                        default:
+                            Log.Warning("Неизвестная команда: {Command}", input);
+                            Console.WriteLine("Неизвестная команда. Доступные: add, remove, list, exit");
+                            break;
+                    }
+
+                    Console.WriteLine();
+                }
+
+                Log.Information("Пользователь завершил работу командой exit");
+                Trace.WriteLine("[TRACE] Приложение корректно завершено.");
+                Console.WriteLine("До свидания!");
+            }
+            catch (Exception ex)
+            {
+                Log.Fatal(ex, "Необработанная ошибка. Завершение приложения.");
+            }
+            finally
+            {
+                traceSource.Close();
+                Trace.Close();
+                Log.CloseAndFlush();
+            }
+        }
+
+        static void AddTask()
+        {
+            Trace.WriteLine("[TRACE] Начало операции: добавление задачи.");
+
+            Console.Write("Введите название задачи: ");
+            string taskName = Console.ReadLine()?.Trim();
+
+            if (string.IsNullOrWhiteSpace(taskName))
+            {
+                // Структурированный лог — свойство Operation попадёт в JSON
+                Log.Warning("Пустое название задачи. Операция {Operation} не выполнена.", "add");
+                Console.WriteLine("Ошибка: название задачи не может быть пустым.");
+                Trace.WriteLine("[TRACE] Конец операции: добавление задачи (неуспешно).");
+                return;
+            }
+
+            tasks.Add(taskName);
+
+            // Структурированный лог — TaskName и TaskCount попадут как отдельные поля в JSON
+            Log.Information("Задача {TaskName} успешно добавлена. Всего задач: {TaskCount}",
+                taskName, tasks.Count);
+            Console.WriteLine($"Задача \"{taskName}\" добавлена.");
+
+            Trace.WriteLine($"[TRACE] Конец операции: добавление задачи (успешно). Количество: {tasks.Count}.");
+        }
+
+        static void RemoveTask()
+        {
+            Trace.WriteLine("[TRACE] Начало операции: удаление задачи.");
+
+            Console.Write("Введите название задачи для удаления: ");
+            string taskName = Console.ReadLine()?.Trim();
+
+            if (string.IsNullOrWhiteSpace(taskName))
+            {
+                Log.Warning("Пустое название задачи. Операция {Operation} не выполнена.", "remove");
+                Console.WriteLine("Ошибка: название задачи не может быть пустым.");
+                Trace.WriteLine("[TRACE] Конец операции: удаление задачи (неуспешно).");
+                return;
+            }
+
+            bool removed = tasks.Remove(taskName);
+
+            if (removed)
+            {
+                Log.Information("Задача {TaskName} успешно удалена. Осталось задач: {TaskCount}",
+                    taskName, tasks.Count);
+                Console.WriteLine($"Задача \"{taskName}\" удалена.");
             }
             else
             {
-                Log.Information("Пользователь указал возраст: {Age}.", age);
+                Log.Error("Задача {TaskName} не найдена для удаления. Текущее количество: {TaskCount}",
+                    taskName, tasks.Count);
+                Console.WriteLine($"Ошибка: задача \"{taskName}\" не найдена.");
             }
 
-            // 4. Error — эмуляция ошибки
-            try
+            Trace.WriteLine($"[TRACE] Конец операции: удаление (результат: {(removed ? "успешно" : "неуспешно")}).");
+        }
+
+        static void ListTasks()
+        {
+            Trace.WriteLine("[TRACE] Начало операции: вывод списка задач.");
+
+            if (tasks.Count == 0)
             {
-                Log.Debug("Попытка выполнить деление...");
-                int result = 100 / (age - age); // намеренное деление на ноль
-                Console.WriteLine(result);
+                Log.Information("Вывод списка: список задач пуст. Количество: {TaskCount}", tasks.Count);
+                Console.WriteLine("Список задач пуст.");
+                Trace.WriteLine("[TRACE] Конец операции: вывод списка (пуст).");
+                return;
             }
-            catch (DivideByZeroException ex)
+
+            Console.WriteLine("--- Текущие задачи ---");
+            for (int i = 0; i < tasks.Count; i++)
             {
-                Log.Error(ex, "Произошла ошибка при вычислении: деление на ноль.");
+                Console.WriteLine($"  {i + 1}. {tasks[i]}");
             }
+            Console.WriteLine("----------------------");
 
-            Log.Information("Приложение MiniLoggerTest завершает работу.");
+            // Структурированный лог — список задач как массив в JSON
+            Log.Information("Выведен список задач. Количество: {TaskCount}. Задачи: {TaskList}",
+                tasks.Count, tasks);
 
-            // Корректное завершение логирования
-            Log.CloseAndFlush();
-
-            Console.WriteLine("\nРабота завершена. Проверьте папку logs/ для просмотра лог-файла.");
-            Console.WriteLine("Нажмите любую клавишу для выхода...");
-            Console.ReadKey();
+            Trace.WriteLine($"[TRACE] Конец операции: вывод списка. Количество: {tasks.Count}.");
         }
     }
 }
